@@ -3,7 +3,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:photo_manager/photo_manager.dart'; // Import photo_manager
+import 'package:photo_manager/photo_manager.dart';
+import 'package:upload_date_api/uploadserver.dart';
+import 'file_service.dart';
 
 class UploadFileScreen extends StatefulWidget {
   const UploadFileScreen({super.key});
@@ -17,7 +19,16 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
   List<File> pickedImages = [];
   bool _isPicking = false;
   bool _isUploading = false;
-  final Dio _dio = Dio();
+  bool isLoading = false;
+  List<Map<String, dynamic>> uploadedImages = [];
+
+  static const String baseUrl = 'http://10.0.2.2:4000';
+
+  @override
+  void initState() {
+    super.initState();
+    fetchUploadedImages();
+  }
 
   Future<List<XFile>?> pickImages({
     ImageSource source = ImageSource.gallery,
@@ -31,141 +42,88 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
 
     try {
       if (source == ImageSource.camera) {
-        print("Checking camera permission...");
         final camStatus = await Permission.camera.status;
-        print("Camera permission status: $camStatus");
         if (camStatus.isDenied) {
-          print("Requesting camera permission...");
           final cam = await Permission.camera.request();
-          print("Camera permission request result: $cam");
           if (!cam.isGranted) {
-            if (cam.isPermanentlyDenied) {
-              print("Camera permission permanently denied, opening settings...");
-              scaffoldMessenger.showSnackBar(
-                const SnackBar(
-                  content: Text('Camera permission is required. Please enable it in settings.'),
-                  action: SnackBarAction(
-                    label: 'Settings',
-                    onPressed: openAppSettings,
-                  ),
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: const Text('Camera permission is required. Please enable it in settings.'),
+                action: SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () async => await openAppSettings(),
                 ),
-              );
-              return null;
-            } else {
-              scaffoldMessenger.showSnackBar(
-                const SnackBar(content: Text('Camera permission denied')),
-              );
-              return null;
-            }
+              ),
+            );
+            return null;
           }
         } else if (camStatus.isPermanentlyDenied) {
-          print("Camera permission already permanently denied, opening settings...");
           scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Camera permission is required. Please enable it in settings.'),
+            SnackBar(
+              content: const Text('Camera permission is required. Please enable it in settings.'),
               action: SnackBarAction(
                 label: 'Settings',
-                onPressed: openAppSettings,
+                onPressed: () async => await openAppSettings(),
               ),
             ),
           );
           return null;
         }
-        print("Attempting to pick image from camera...");
+
         final xFile = await _picker.pickImage(
           source: source,
           imageQuality: 85,
           maxWidth: 2000,
         );
-        print("Image picker result: ${xFile?.path ?? 'null'}");
         if (xFile != null) {
-          // Save the camera image to the gallery using photo_manager
-          print("Saving image to gallery...");
           final file = File(xFile.path);
-          final saved = await PhotoManager.editor.saveImage(
+          await PhotoManager.editor.saveImage(
             await file.readAsBytes(),
-            title: 'MyAppPhoto_${DateTime.now().millisecondsSinceEpoch}.jpg', filename: '',
+            title: 'MyAppPhoto_${DateTime.now().millisecondsSinceEpoch}.jpg',
+            filename: 'MyAppPhoto_${DateTime.now().millisecondsSinceEpoch}.jpg',
           );
-          if (saved != null) {
-            print("Image saved to gallery successfully");
-            scaffoldMessenger.showSnackBar(
-              const SnackBar(content: Text('Image saved to gallery')),
-            );
-          } else {
-            print("Failed to save image to gallery");
-            scaffoldMessenger.showSnackBar(
-              const SnackBar(content: Text('Failed to save image to gallery')),
-            );
-          }
           return [xFile];
         }
         return null;
       } else {
-        print("Checking photos permission...");
         final photosStatus = await Permission.photos.status;
-        print("Photos permission status: $photosStatus");
-        if (photosStatus.isDenied) {
-          print("Requesting photos permission...");
+        if (photosStatus.isDenied || photosStatus.isLimited) {
           final photos = await Permission.photos.request();
-          print("Photos permission request result: $photos");
           if (!(photos.isGranted || photos.isLimited)) {
-            if (photos.isPermanentlyDenied) {
-              print("Photos permission permanently denied, opening settings...");
-              scaffoldMessenger.showSnackBar(
-                const SnackBar(
-                  content: Text('Photo access is required. Please enable it in settings.'),
-                  action: SnackBarAction(
-                    label: 'Settings',
-                    onPressed: openAppSettings,
-                  ),
+            scaffoldMessenger.showSnackBar(
+              SnackBar(
+                content: const Text('Photo access is required. Please enable it in settings.'),
+                action: SnackBarAction(
+                  label: 'Settings',
+                  onPressed: () async => await openAppSettings(),
                 ),
-              );
-              return null;
-            } else {
-              scaffoldMessenger.showSnackBar(
-                const SnackBar(content: Text('Photo permission denied')),
-              );
-              return null;
-            }
+              ),
+            );
+            return null;
           }
         } else if (photosStatus.isPermanentlyDenied) {
-          print("Photos permission already permanently denied, opening settings...");
           scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Photo access is required. Please enable it in settings.'),
+            SnackBar(
+              content: const Text('Photo access is required. Please enable it in settings.'),
               action: SnackBarAction(
                 label: 'Settings',
-                onPressed: openAppSettings,
+                onPressed: () async => await openAppSettings(),
               ),
             ),
           );
           return null;
         }
-        print("Attempting to pick multiple images from gallery...");
+
         final xFiles = await _picker.pickMultiImage(
           imageQuality: 85,
           maxWidth: 2000,
         );
-        print("Image picker result: ${xFiles.map((x) => x.path).toList()}");
-        if (xFiles.isEmpty && photosStatus.isLimited) {
-          scaffoldMessenger.showSnackBar(
-            const SnackBar(
-              content: Text('Limited access granted. Please select images or allow full access in settings.'),
-              action: SnackBarAction(
-                label: 'Settings',
-                onPressed: openAppSettings,
-              ),
-            ),
-          );
-        }
         return xFiles;
       }
     } catch (e, stackTrace) {
       print("Error in pickImages: $e");
       print("Stack trace: $stackTrace");
-      scaffoldMessenger.showSnackBar(
-        SnackBar(content: Text('Error: $e')),
-      );
+      scaffoldMessenger.showSnackBar(SnackBar(content: Text('Failed to pick images: $e')));
       return null;
     } finally {
       _isPicking = false;
@@ -173,12 +131,8 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
   }
 
   Future<void> uploadImages(List<File> files) async {
-    if (_isUploading) {
-      print("Already uploading, please wait.");
-      return;
-    }
+    if (_isUploading) return;
     if (files.isEmpty) {
-      print("No images to upload.");
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No images selected to upload')),
       );
@@ -192,47 +146,123 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
     try {
       final formData = FormData();
       for (var file in files) {
-        formData.files.add(MapEntry(
-          'files',
-          await MultipartFile.fromFile(file.path, filename: file.path.split('/').last),
-        ));
+        formData.files.add(
+          MapEntry(
+            'files',
+            await MultipartFile.fromFile(file.path, filename: file.path.split('/').last),
+          ),
+        );
       }
 
-      const uploadUrl = 'https://d44ff53a0f09.ngrok-free.app/upload';
-      print("Uploading ${files.length} images to $uploadUrl...");
-      final response = await _dio.post(
-        uploadUrl,
-        data: formData,
-        options: Options(
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        ),
-      );
+      final response = await UploadApi.uploadFiles(formData);
 
-      print("Upload response: ${response.statusCode} - ${response.data}");
-      if (response.statusCode == 200) {
+      if (response.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Uploaded ${files.length} images successfully!')),
         );
         setState(() {
           pickedImages.clear();
         });
+        await fetchUploadedImages();
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to upload images: ${response.statusMessage}')),
+          SnackBar(content: Text('Failed to upload images: ${response.statusMessage ?? "Unknown error"}')),
         );
       }
-    } catch (e, stackTrace) {
+    } catch (e) {
       print("Error in uploadImages: $e");
-      print("Stack trace: $stackTrace");
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error uploading images: $e')),
+        SnackBar(content: Text('Failed to upload images: $e')),
       );
     } finally {
       setState(() {
         _isUploading = false;
       });
+    }
+  }
+
+  Future<void> fetchUploadedImages() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await UploadApi.listFiles();
+
+      if (response.statusCode == 200) {
+        final data = response.data;
+
+        if (data is Map && data.containsKey('files') && data['files'] is List) {
+          setState(() {
+            uploadedImages = List<Map<String, dynamic>>.from(data['files'].map((file) => Map<String, dynamic>.from(file)));
+          });
+          print("Fetched ${uploadedImages.length} images successfully");
+        } else {
+          print("Unexpected response format: $data");
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to fetch images: Invalid response format')),
+          );
+        }
+      } else {
+        print("Failed to fetch images: ${response.statusCode} - ${response.statusMessage}");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to fetch images: ${response.statusMessage ?? "Unknown error"}')),
+        );
+      }
+    } catch (e, stack) {
+      print("Error fetching images: $e");
+      print(stack);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to fetch images: $e')),
+      );
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> downloadImage(String fileUrl) async {
+    try {
+      final file = await FileService.downloadToAppDir(fileUrl, saveToGallery: true);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Downloaded to: ${file.path}")),
+      );
+    } catch (e) {
+      print("Error downloading image: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Failed to download image: $e"),
+          action: e.toString().contains('permission')
+              ? SnackBarAction(
+            label: 'Settings',
+            onPressed: () async => await openAppSettings(),
+          )
+              : null,
+        ),
+      );
+    }
+  }
+
+  Future<void> deleteImage(String filename) async {
+    try {
+      final response = await UploadApi.deleteFile(filename);
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Deleted $filename')),
+        );
+        await fetchUploadedImages();
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to delete: ${response.statusMessage ?? "Unknown error"}')),
+        );
+      }
+    } catch (e) {
+      print("Error deleting image: $e");
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to delete image: $e')),
+      );
     }
   }
 
@@ -250,7 +280,7 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
               children: [
                 const Text(
                   "Choose image source",
-                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 20),
                 Row(
@@ -271,13 +301,9 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
                           setState(() {
                             pickedImages = xFile.map((xFile) => File(xFile.path)).toList();
                           });
-                        } else {
-                          scaffoldMessenger.showSnackBar(
-                            const SnackBar(content: Text('No image selected from camera')),
-                          );
                         }
                       },
-                      icon: const Icon(Icons.camera),
+                      icon: const Icon(Icons.camera, color: Colors.white),
                     ),
                     IconButton.filled(
                       style: IconButton.styleFrom(
@@ -294,17 +320,12 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
                           setState(() {
                             pickedImages = xFiles.map((xFile) => File(xFile.path)).toList();
                           });
-                        } else {
-                          scaffoldMessenger.showSnackBar(
-                            const SnackBar(content: Text('No images selected from gallery')),
-                          );
                         }
                       },
-                      icon: const Icon(Icons.photo),
+                      icon: const Icon(Icons.photo, color: Colors.white),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -316,21 +337,30 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Image Upload'),
+        backgroundColor: Colors.blueGrey,
+      ),
       body: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
               width: double.infinity,
-              height: 300,
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
+              height: 200,
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(30),
-                color: Colors.blueGrey,
+                borderRadius: BorderRadius.circular(16),
+                color: Colors.blueGrey.withOpacity(0.1),
               ),
               child: pickedImages.isEmpty
-                  ? const Icon(Icons.image, size: 60, color: Colors.white)
+                  ? const Center(
+                child: Text(
+                  'No images selected\nTap "Pick images" to select',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 16, color: Colors.blueGrey),
+                ),
+              )
                   : GridView.builder(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
@@ -339,7 +369,10 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
                 ),
                 itemCount: pickedImages.length,
                 itemBuilder: (context, index) {
-                  return Image.file(pickedImages[index], fit: BoxFit.cover);
+                  return Image.file(
+                    pickedImages[index],
+                    fit: BoxFit.cover,
+                  );
                 },
               ),
             ),
@@ -348,24 +381,85 @@ class _UploadFileScreenState extends State<UploadFileScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blueGrey,
                 foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               ),
               onPressed: _isUploading ? null : showImageSource,
-              child: const Text("Pick images", style: TextStyle(fontSize: 30)),
+              child: const Text("Pick images", style: TextStyle(fontSize: 16)),
             ),
             const SizedBox(height: 10),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blueGrey,
                 foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               ),
               onPressed: _isUploading || pickedImages.isEmpty
                   ? null
-                  : () async {
-                await uploadImages(pickedImages);
-              },
+                  : () async => await uploadImages(pickedImages),
               child: Text(
                 _isUploading ? "Uploading..." : "Upload images",
-                style: const TextStyle(fontSize: 30),
+                style: const TextStyle(fontSize: 16),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              "Uploaded Images",
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            Expanded(
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : uploadedImages.isEmpty
+                  ? const Center(
+                child: Text(
+                  "No images uploaded yet",
+                  style: TextStyle(fontSize: 16, color: Colors.grey),
+                ),
+              )
+                  : GridView.builder(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 4,
+                  mainAxisSpacing: 4,
+                ),
+                itemCount: uploadedImages.length,
+                itemBuilder: (context, index) {
+                  final img = uploadedImages[index];
+                  final fileUrl = "$baseUrl/files/${img['filename']}";
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      InkWell(
+                        onTap: () => downloadImage(fileUrl),
+                        child: Image.network(
+                          fileUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => const Icon(
+                            Icons.broken_image,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: InkWell(
+                          onTap: () => deleteImage(img['filename']),
+                          child: Container(
+                            color: Colors.black54,
+                            padding: const EdgeInsets.all(4),
+                            child: const Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
